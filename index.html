@@ -1,0 +1,547 @@
+
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>SPONGE ASMR — 3D Bathroom</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;overflow:hidden;background:#b9b6b0;font-family:Arial,sans-serif;color:white}
+canvas{display:block;touch-action:none}
+#ui{position:fixed;inset:0;pointer-events:none}
+.panel{background:#202326c9;border:1px solid #ffffff55;backdrop-filter:blur(14px);border-radius:16px;padding:12px 17px;box-shadow:0 8px 25px #0003}
+.top{position:absolute;top:18px;left:18px;right:18px;display:flex;justify-content:space-between;align-items:center;gap:12px}
+.logo{font-size:18px;font-weight:900;letter-spacing:2px}
+.score{font-size:15px;margin-top:6px}
+.meter{width:min(38vw,330px);text-align:center}
+.meter b{font-size:13px}
+.track{height:12px;background:#ffffff35;border-radius:20px;margin-top:8px;overflow:hidden}
+#bar{height:100%;width:0;background:linear-gradient(90deg,#9deaff,#fff);border-radius:20px}
+button{pointer-events:auto;border:1px solid #ffffff66;background:#202326dc;color:white;padding:12px 16px;border-radius:13px;font-size:14px;cursor:pointer}
+#help{position:absolute;bottom:20px;left:50%;transform:translateX(-50%);white-space:nowrap;text-align:center;background:#202326dd;border:1px solid #ffffff55;border-radius:30px;padding:14px 22px;font-size:14px}
+#sound{position:absolute;right:18px;bottom:80px}
+#loading{position:fixed;inset:0;display:grid;place-items:center;background:#b9b6b0;color:#333;z-index:10;font-size:20px}
+@media(max-width:600px){
+ .top{top:9px;left:8px;right:8px}
+ .panel{padding:9px 11px}
+ .logo{font-size:13px}
+ .score{font-size:12px}
+ .meter{width:34vw}
+ .meter b{font-size:10px}
+ button{padding:9px;font-size:11px}
+ #help{bottom:12px;font-size:11px;padding:12px 14px}
+}
+</style>
+</head>
+<body>
+<div id="loading">Создаём ванную комнату...</div>
+<div id="ui">
+ <div class="top">
+  <div class="panel">
+   <div class="logo">🧽 SPONGE ASMR</div>
+   <div class="score">⭐ <span id="score">0</span></div>
+  </div>
+  <div class="panel meter">
+   <b>🫧 ПЕНА: <span id="percent">0</span>%</b>
+   <div class="track"><div id="bar"></div></div>
+  </div>
+  <button id="reset">↻ Сброс</button>
+ </div>
+ <button id="sound">🔊 Звук</button>
+ <div id="help">Зажми губку и начинай мять</div>
+</div>
+
+<script type="importmap">
+{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"}}
+</script>
+
+<script type="module">
+import * as THREE from "three";
+
+const $=id=>document.getElementById(id);
+let scene,camera,renderer,spongeGroup,sponge,water;
+let squeezing=false,score=0,foamLevel=0;
+let bubbles=[],foam=[];
+let audio=null,soundOn=true,lastSound=0;
+let clock=new THREE.Clock();
+let originalPositions;
+
+try{
+ init();
+ animate();
+ $("loading").style.display="none";
+}catch(e){
+ console.error(e);
+ $("loading").textContent="Ошибка 3D. Проверь подключение к интернету и обнови страницу.";
+}
+
+function init(){
+ scene=new THREE.Scene();
+ scene.background=new THREE.Color(0xc5c4c0);
+ scene.fog=new THREE.Fog(0xc5c4c0,15,29);
+
+ camera=new THREE.PerspectiveCamera(39,innerWidth/innerHeight,.1,100);
+ camera.position.set(6.7,7.4,9.2);
+ camera.lookAt(0,1.05,0);
+
+ renderer=new THREE.WebGLRenderer({antialias:true,powerPreference:"high-performance"});
+ renderer.setSize(innerWidth,innerHeight);
+ renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+ renderer.shadowMap.enabled=true;
+ renderer.shadowMap.type=THREE.PCFSoftShadowMap;
+ renderer.toneMapping=THREE.ACESFilmicToneMapping;
+ renderer.toneMappingExposure=1.15;
+ renderer.outputColorSpace=THREE.SRGBColorSpace;
+ document.body.appendChild(renderer.domElement);
+
+ scene.add(new THREE.HemisphereLight(0xffffff,0x68605a,2));
+
+ const key=new THREE.DirectionalLight(0xfff1dc,3.4);
+ key.position.set(-5,9,6);
+ key.castShadow=true;
+ key.shadow.mapSize.set(2048,2048);
+ key.shadow.camera.left=-8;key.shadow.camera.right=8;
+ key.shadow.camera.top=8;key.shadow.camera.bottom=-8;
+ scene.add(key);
+
+ const fill=new THREE.DirectionalLight(0xd7edff,2);
+ fill.position.set(5,5,-6);
+ scene.add(fill);
+
+ const wallMat=new THREE.MeshStandardMaterial({color:0xd9d6cf,roughness:.85});
+ const wall=new THREE.Mesh(new THREE.PlaneGeometry(30,15),wallMat);
+ wall.position.set(0,6,-4.2);
+ scene.add(wall);
+
+ // Настенная плитка
+ const grout=new THREE.GridHelper(24,24,0xbab7b0,0xbab7b0);
+ grout.position.set(0,3.5,-4.12);
+ grout.scale.set(1,1,.6);
+ scene.add(grout);
+
+ // Пол
+ const floor=new THREE.Mesh(
+  new THREE.PlaneGeometry(100,100),
+  new THREE.MeshStandardMaterial({color:0xaaa69e,roughness:.7})
+ );
+ floor.rotation.x=-Math.PI/2;
+ floor.position.y=-.08;
+ floor.receiveShadow=true;
+ scene.add(floor);
+
+ createCounter();
+ createBasin();
+ createFaucet();
+ createSponge();
+ createFoam();
+ createBathroomDetails();
+
+ window.addEventListener("resize",resize);
+ renderer.domElement.addEventListener("pointerdown",startSqueeze);
+ window.addEventListener("pointerup",stopSqueeze);
+ window.addEventListener("pointercancel",stopSqueeze);
+ window.addEventListener("blur",stopSqueeze);
+ $("reset").onclick=reset;
+ $("sound").onclick=()=>{
+  soundOn=!soundOn;
+  $("sound").textContent=soundOn?"🔊 Звук":"🔇 Звук";
+ };
+}
+
+function standard(color,roughness=.5,metalness=0){
+ return new THREE.MeshStandardMaterial({color,roughness,metalness});
+}
+
+function createCounter(){
+ const top=new THREE.Mesh(
+  new THREE.BoxGeometry(7.6,.38,5.4),
+  new THREE.MeshStandardMaterial({color:0xddd9d0,roughness:.25})
+ );
+ top.position.set(0,.75,0);
+ top.receiveShadow=true;
+ top.castShadow=true;
+ scene.add(top);
+
+ const cabinet=new THREE.Mesh(
+  new THREE.BoxGeometry(7.3,1.65,5.1),
+  standard(0x766d65,.55)
+ );
+ cabinet.position.set(0,-.25,0);
+ cabinet.castShadow=true;
+ cabinet.receiveShadow=true;
+ scene.add(cabinet);
+
+ for(let x of [-2.4,-.8,.8,2.4]){
+  const line=new THREE.Mesh(
+   new THREE.BoxGeometry(.012,1.4,.02),
+   standard(0x514941)
+  );
+  line.position.set(x,-.25,2.56);
+  scene.add(line);
+ }
+}
+
+function createBasin(){
+ const ceramic=new THREE.MeshPhysicalMaterial({
+  color:0xf4f3ef,roughness:.16,metalness:0,
+  clearcoat:1,clearcoatRoughness:.08
+ });
+
+ // Наружная форма чаши
+ const outer=new THREE.Mesh(
+  new THREE.SphereGeometry(1,96,48),
+  ceramic
+ );
+ outer.scale.set(2.55,.82,1.78);
+ outer.position.set(0,.64,0);
+ outer.castShadow=true;
+ outer.receiveShadow=true;
+ scene.add(outer);
+
+ // Внутренняя поверхность чаши
+ const innerMat=new THREE.MeshPhysicalMaterial({
+  color:0xe5e8e8,roughness:.2,metalness:.03,
+  clearcoat:1,clearcoatRoughness:.1,side:THREE.DoubleSide
+ });
+ const geo=new THREE.BufferGeometry();
+ const vertices=[],indices=[];
+ const rings=32,segments=100;
+ for(let j=0;j<=rings;j++){
+  const r=j/rings;
+  for(let i=0;i<=segments;i++){
+   const a=i/segments*Math.PI*2;
+   const x=Math.cos(a)*2.35*r;
+   const z=Math.sin(a)*1.57*r;
+   const y=.30+.57*r*r;
+   vertices.push(x,y,z);
+  }
+ }
+ for(let j=0;j<rings;j++){
+  for(let i=0;i<segments;i++){
+   const a=j*(segments+1)+i;
+   const b=a+segments+1;
+   indices.push(a,b,a+1,b,b+1,a+1);
+  }
+ }
+ geo.setAttribute("position",new THREE.Float32BufferAttribute(vertices,3));
+ geo.setIndex(indices);
+ geo.computeVertexNormals();
+ const inside=new THREE.Mesh(geo,innerMat);
+ inside.position.y=.02;
+ inside.receiveShadow=true;
+ scene.add(inside);
+
+ // Широкий бортик
+ const rim=new THREE.Mesh(
+  new THREE.TorusGeometry(1,.055,20,120),
+  ceramic
+ );
+ rim.rotation.x=Math.PI/2;
+ rim.scale.set(2.48,1.65,1);
+ rim.position.y=1.59;
+ scene.add(rim);
+
+ // Вода на дне чаши
+ water=new THREE.Mesh(
+  new THREE.CircleGeometry(1,96),
+  new THREE.MeshPhysicalMaterial({
+   color:0x9bd8e9,transparent:true,opacity:.48,
+   roughness:.08,metalness:.08,clearcoat:1,
+   side:THREE.DoubleSide
+  })
+ );
+ water.rotation.x=-Math.PI/2;
+ water.scale.set(2.05,1.27,1);
+ water.position.set(0,.53,0);
+ scene.add(water);
+
+ // Слив
+ const drainMat=new THREE.MeshStandardMaterial({color:0x777e80,metalness:.92,roughness:.2});
+ const drain=new THREE.Mesh(new THREE.CylinderGeometry(.25,.25,.045,48),drainMat);
+ drain.position.set(.7,.52,.35);
+ scene.add(drain);
+
+ const holeMat=standard(0x242a2b,.3,.7);
+ for(let i=0;i<12;i++){
+  const a=i/12*Math.PI*2;
+  const hole=new THREE.Mesh(new THREE.CylinderGeometry(.018,.018,.05,12),holeMat);
+  hole.position.set(.7+Math.cos(a)*.17,.55,.35+Math.sin(a)*.17);
+  scene.add(hole);
+ }
+}
+
+function cylinderBetween(a,b,r,mat){
+ const dir=new THREE.Vector3().subVectors(b,a);
+ const mesh=new THREE.Mesh(new THREE.CylinderGeometry(r,r,dir.length(),24),mat);
+ mesh.position.copy(a).add(b).multiplyScalar(.5);
+ mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),dir.normalize());
+ mesh.castShadow=true;
+ scene.add(mesh);
+ return mesh;
+}
+
+function createFaucet(){
+ const chrome=new THREE.MeshStandardMaterial({
+  color:0xd6dcdf,metalness:.95,roughness:.13
+ });
+ const dark=standard(0x747b80,.2,.85);
+
+ const base=new THREE.Mesh(new THREE.CylinderGeometry(.32,.35,.13,48),chrome);
+ base.position.set(0,1.03,-2.12);
+ scene.add(base);
+
+ const upright=new THREE.Mesh(new THREE.CylinderGeometry(.13,.15,1.25,32),chrome);
+ upright.position.set(0,1.65,-2.12);
+ scene.add(upright);
+
+ const elbow=new THREE.Mesh(new THREE.TorusGeometry(.48,.13,24,48,Math.PI/2),chrome);
+ elbow.rotation.set(0,Math.PI,0);
+ elbow.position.set(.48,2.27,-2.12);
+ scene.add(elbow);
+
+ cylinderBetween(
+  new THREE.Vector3(.48,2.27,-2.12),
+  new THREE.Vector3(.48,1.83,-1.66),
+  .13,chrome
+ );
+
+ const nozzle=new THREE.Mesh(new THREE.CylinderGeometry(.13,.1,.18,32),dark);
+ nozzle.position.set(.48,1.78,-1.66);
+ scene.add(nozzle);
+
+ // Ручки крана
+ for(const x of [-.55,.55]){
+  const handle=new THREE.Mesh(new THREE.CylinderGeometry(.09,.09,.42,24),chrome);
+  handle.position.set(x,1.15,-2.12);
+  handle.rotation.z=.3;
+  scene.add(handle);
+ }
+}
+
+function makeTexture(){
+ const c=document.createElement("canvas");
+ c.width=c.height=512;
+ const ctx=c.getContext("2d");
+ ctx.fillStyle="#eab03b";
+ ctx.fillRect(0,0,512,512);
+
+ for(let i=0;i<17000;i++){
+  const x=Math.random()*512,y=Math.random()*512;
+  const r=.7+Math.random()*4.5;
+  ctx.beginPath();
+  ctx.arc(x,y,r,0,Math.PI*2);
+  ctx.fillStyle=Math.random()>.5?"#fff0a0":"#945316";
+  ctx.globalAlpha=.12+Math.random()*.27;
+  ctx.fill();
+ }
+ ctx.globalAlpha=1;
+ return new THREE.CanvasTexture(c);
+}
+
+function createSponge(){
+ spongeGroup=new THREE.Group();
+ scene.add(spongeGroup);
+ spongeGroup.position.set(0,1.30,.1);
+ spongeGroup.rotation.set(-.1,-.22,-.05);
+
+ const texture=makeTexture();
+ texture.colorSpace=THREE.SRGBColorSpace;
+
+ const mat=new THREE.MeshStandardMaterial({
+  map:texture,roughness:.95,bumpMap:texture,bumpScale:.065
+ });
+
+ const geo=new THREE.BoxGeometry(2.65,.75,1.55,24,12,16);
+ sponge=new THREE.Mesh(geo,mat);
+ sponge.castShadow=true;
+ sponge.receiveShadow=true;
+ spongeGroup.add(sponge);
+
+ originalPositions=geo.attributes.position.array.slice();
+
+ const scrubber=new THREE.Mesh(
+  new THREE.BoxGeometry(2.55,.12,1.48,16,2,12),
+  standard(0x327d50,.95)
+ );
+ scrubber.position.y=-.39;
+ scrubber.castShadow=true;
+ sponge.add(scrubber);
+}
+
+function createFoam(){
+ const white=new THREE.MeshPhysicalMaterial({
+  color:0xffffff,roughness:.15,metalness:0,
+  clearcoat:1,clearcoatRoughness:.08
+ });
+ const pearl=new THREE.MeshPhysicalMaterial({
+  color:0xe7faff,roughness:.08,transparent:true,opacity:.72,
+  transmission:.1,clearcoat:1
+ });
+ const geo=new THREE.SphereGeometry(1,18,14);
+
+ for(let i=0;i<180;i++){
+  const m=new THREE.Mesh(geo,i%4===0?pearl:white);
+  const size=.10+Math.random()*.22;
+  m.scale.set(size,size*.8,size);
+  m.position.set((Math.random()-.5)*4.5,.55+Math.random()*.25,(Math.random()-.5)*2.8);
+  m.visible=false;
+  m.castShadow=true;
+  scene.add(m);
+  foam.push(m);
+ }
+}
+
+function createBathroomDetails(){
+ // Дозатор мыла
+ const glass=new THREE.MeshPhysicalMaterial({
+  color:0xd8e2df,transparent:true,opacity:.62,roughness:.12
+ });
+ const bottle=new THREE.Mesh(new THREE.CylinderGeometry(.23,.27,.8,40),glass);
+ bottle.position.set(-3.0,1.35,-1.0);
+ scene.add(bottle);
+
+ const pump=new THREE.Mesh(
+  new THREE.CylinderGeometry(.06,.08,.25,20),
+  standard(0xb6a58e,.25,.65)
+ );
+ pump.position.set(-3,1.87,-1);
+ scene.add(pump);
+
+ // Полотенце на столешнице
+ const towel=new THREE.Mesh(
+  new THREE.BoxGeometry(.9,.09,.55),
+  standard(0xe8e0d5,.95)
+ );
+ towel.position.set(3.0,1.0,-1.1);
+ towel.rotation.y=-.25;
+ scene.add(towel);
+
+ // Декоративная баночка
+ const jar=new THREE.Mesh(
+  new THREE.CylinderGeometry(.24,.24,.45,32),
+  standard(0xc5b9a7,.45)
+ );
+ jar.position.set(3.0,1.35,-1.2);
+ scene.add(jar);
+}
+
+function startSqueeze(e){
+ if(e.target.closest("button"))return;
+ squeezing=true;
+ $("help").textContent="🧽 Мни губку! Пена заполняет раковину";
+}
+
+function stopSqueeze(){
+ squeezing=false;
+ $("help").textContent="Зажми губку и начинай мять";
+}
+
+function sound(){
+ if(!soundOn)return;
+ try{
+  if(!audio)audio=new(window.AudioContext||window.webkitAudioContext)();
+  if(audio.state==="suspended")audio.resume();
+  const buffer=audio.createBuffer(1,audio.sampleRate*.16,audio.sampleRate);
+  const d=buffer.getChannelData(0);
+  for(let i=0;i<d.length;i++)d[i]=(Math.random()*2-1)*(1-i/d.length);
+  const src=audio.createBufferSource();
+  const filter=audio.createBiquadFilter();
+  const gain=audio.createGain();
+  src.buffer=buffer;
+  filter.type="lowpass";filter.frequency.value=650;
+  gain.gain.value=.12;
+  src.connect(filter);filter.connect(gain);gain.connect(audio.destination);
+  src.start();
+ }catch(e){}
+}
+
+function spawnBubble(){
+ const mat=new THREE.MeshPhysicalMaterial({
+  color:0xe8faff,transparent:true,opacity:.52,
+  roughness:.04,metalness:.05,clearcoat:1
+ });
+ const b=new THREE.Mesh(new THREE.SphereGeometry(1,18,14),mat);
+ const s=.035+Math.random()*.10;
+ b.scale.set(s,s,s);
+ b.position.set((Math.random()-.5)*2.7,.9+Math.random()*.6,(Math.random()-.5)*1.5);
+ b.userData={speed:.5+Math.random()*1.1,drift:(Math.random()-.5)*.7};
+ scene.add(b);
+ bubbles.push(b);
+}
+
+function updateFoam(){
+ const count=Math.floor(foamLevel/100*foam.length);
+ foam.forEach((b,i)=>{
+  b.visible=i<count;
+  if(i<count){
+   const a=i*2.399;
+   const r=.45+(i%13)*.13;
+   b.position.x=Math.cos(a)*r;
+   b.position.z=Math.sin(a)*r*.65;
+   b.position.y=.58+(i%5)*.07;
+  }
+ });
+}
+
+function reset(){
+ score=0;foamLevel=0;
+ bubbles.forEach(b=>scene.remove(b));
+ bubbles=[];
+ updateUI();
+ updateFoam();
+}
+
+function updateUI(){
+ $("score").textContent=score;
+ $("percent").textContent=Math.round(foamLevel);
+ $("bar").style.width=foamLevel+"%";
+}
+
+function resize(){
+ camera.aspect=innerWidth/innerHeight;
+ camera.updateProjectionMatrix();
+ renderer.setSize(innerWidth,innerHeight);
+}
+
+function animate(){
+ requestAnimationFrame(animate);
+ const dt=Math.min(clock.getDelta(),.04);
+ const t=clock.elapsedTime;
+
+ if(sponge){
+  const targetY=squeezing?.56:1;
+  sponge.scale.y=THREE.MathUtils.lerp(sponge.scale.y,targetY,squeezing?.22:.09);
+  sponge.scale.x=THREE.MathUtils.lerp(sponge.scale.x,squeezing?1.06:1,.12);
+  spongeGroup.position.y=1.30+(squeezing?-.12:0)+Math.sin(t*2)*.012;
+  spongeGroup.rotation.z=THREE.MathUtils.lerp(
+   spongeGroup.rotation.z,squeezing?Math.sin(t*12)*.035:-.05,.12
+  );
+ }
+
+ if(squeezing){
+  foamLevel=Math.min(100,foamLevel+dt*9);
+  score+=Math.round(dt*18);
+  if(Math.random()<dt*24)spawnBubble();
+  if(t-lastSound>.48){sound();lastSound=t;}
+ }else{
+  foamLevel=Math.max(0,foamLevel-dt*.12);
+ }
+
+ bubbles.forEach((b,i)=>{
+  b.position.y+=b.userData.speed*dt;
+  b.position.x+=Math.sin(t*2+i)*dt*b.userData.drift;
+  if(b.position.y>4.5){
+   scene.remove(b);
+   bubbles.splice(i,1);
+  }
+ });
+
+ if(water)water.position.y=.53+Math.sin(t*1.8)*.009;
+ updateFoam();
+ updateUI();
+ renderer.render(scene,camera);
+}
+</script>
+</body>
+</html>
